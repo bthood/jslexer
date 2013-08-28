@@ -105,15 +105,17 @@ var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
       // Update backreferences to account for backreferences in previous rules
       // once all rules are combined into a single long regex.
       this.updateReferences = function (offset) {
-         // The first alternative is to avoid matching backreferences inside
-         // character classes, since these are not supported by Javascript.
-         var backref_exp = /\[(?:\\\d+|[^\]])+\]|\\(\d+)/g;
+         // The first 2 alternatives avoid matching backreferences inside
+         // character classes, since these are not supported by Javascript, and
+         // backreferences with extra leading backslashes.
+         var backref_exp = /\[(?:\\.|[^\]])+\]|\\\D|\\(\d+)/g;
+         var rule = this;
          this.pattern = this.pattern.replace(backref_exp, function (match, p1) {
             if (!p1) {
                return match;  // ignore: the first alternative matched
             } else {
                var backref = parseInt(p1, 10);
-               if (backref > 0 && br <= this.numCaptures()) {
+               if (backref > 0 && backref <= rule.numCaptures()) {
                   return '\\' + (backref + offset + 1);  // add 1 for whole-rule capture
                } else {
                   return parseInt(p1, 8); // Assume this was an escape sequence?
@@ -126,16 +128,16 @@ var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
    // Validate the rules and compile them into one giant regex.
    this.compile = function () {
       this._rules = []
-      if (!rules || rules.length == 0) {
+      if (!rules || !(rules instanceof Array) || rules.length == 0) {
          throw new Lexer.ValidationError(null, 'no rules provided');
       }
       var totalCaptures = 0, overallExp = '';
       for (var i = 0; i < rules.length; ++i) {
          var rule = rules[i];
          if (!rule) {
-            continue;
+            throw new Lexer.ValidationError(i+1, 'invalid rule');
          } else if (!rule.name) {  // Rule must be named.
-            throw new Lexer.ValidationError(i+1, 'missing name')
+            throw new Lexer.ValidationError(i+1, 'missing name');
          } else if (typeof(rule.name) != 'string' || rule.name.length == 0) {  // Rule must be named.
             throw new Lexer.ValidationError(i+1, 'invalid name "' + rule.name + '"')
          } else if (!rule.pattern) {  // Rule pattern is mandatory.
@@ -146,25 +148,24 @@ var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
             throw new Lexer.ValidationError(rule.name, 'invalid callback "' + rule.callback + '"');
          }
          var expression = (rule.pattern instanceof RegExp) ?
-            rule.pattern.source : rule.pattern.replace(/([-.*+?^$()\[\]{}\\])/g, '\\$1')
+            rule.pattern.source : rule.pattern.replace(/[-.*+?^$()\[\]{}\\]/g, '\\$1')
          expression = expression.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
          var r = new Rule(rule.name, expression, rule.callback, !!rule.discard);
-         r.updateReferences(totalCaptures);
+         r.updateReferences(totalCaptures + 1);
          totalCaptures += r.numCaptures() + 1;
          this._rules.push(r);
          overallExp += '|(' + expression + ')';
       }
       // Add a special default rule to deal with HTML line breaks.
       this._rules.unshift(
-         new Rule('HTML_BREAK', '<br\s*\/?\s*>', function (captures, lexState) {
+         new Rule('HTML_BREAK', '<br\\s*\\/?\\s*>', function (captures, lexState) {
             lexState.line += 1;
-            lexState.offset = 0;
+            lexState.offset = 1;
             lexState.updated = true;
             return null;
          }, true));
       overallExp = '(<br\s*\/?\s*>)' + overallExp;
       this._languageRegex = new RegExp(overallExp, 'gm');
-      console.log(this._languageRegex);
    }
 
    // Try to recognize the text.
@@ -187,14 +188,15 @@ var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
          // continue processing. This is guaranteed to select at least one of
          // the rules because there must have been a match to get here.
          var rule = null, val = arguments[0];
+         //console.log(arguments);
          for (ruleIndex = 0, captureIndex = 1; ruleIndex < lexer._rules.length; ++ruleIndex) {
-            console.log(ruleIndex, lexer._rules[ruleIndex]);
+            //console.log(ruleIndex, lexer._rules[ruleIndex]);
             var n = lexer._rules[ruleIndex].numCaptures() + 1;
             for (var i = 0; i < n; ++i, ++captureIndex) {
-               console.log(captureIndex, 'argument', arguments[captureIndex]);
+               //console.log(captureIndex, 'argument', arguments[captureIndex]);
                if (arguments[captureIndex]) {
                   rule = lexer._rules[ruleIndex];
-                  console.log('match');
+                  //console.log('match');
                   break;
                }
             }
@@ -249,12 +251,13 @@ Lexer.Token = function (name, content, lexState) {
  * The error thrown when the rules for a language are incorrectly specified.
  */
 Lexer.ValidationError = function (rule, msg) {
-   this.rule = rule;
+   this.name = 'Lexer.ValidationError';
    this.message = msg;
+   this.rule = rule;
    //this.stack = Lexer.getStackTrace();
 
    // Return a nicely formatted error string.
-   var toString = function () {
+   this.toString = function () {
       var result = 'Validation Error: ';
       if (rule) {
          // If the rule name is a string, surround in quotes.
@@ -263,3 +266,4 @@ Lexer.ValidationError = function (rule, msg) {
       return result + msg;
    }
 }
+//Lexer.ValidationError.prototype = new SyntaxError();

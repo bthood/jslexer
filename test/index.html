@@ -1,0 +1,337 @@
+<!doctype html>
+<html>
+   <head>
+      <title>Lexer Tests</title>
+      <link rel="stylesheet" href="qunit-1.12.0.css">
+      <script src="qunit-1.12.0.js"></script>
+      <script src="../lexer.js"></script>
+      <script type="text/javascript">
+      // A sample ruleset (a simple version of LISP).
+      var lispRules = [
+         { name: 'LPAREN', pattern: /\(/ },
+         { name: 'RPAREN', pattern: /\)/ },
+         { name: 'WHITESPACE', pattern: /\s+/ },
+         { name: 'SYMBOL', pattern: /\w+|./ }
+      ];
+      // A helper function to precompile a given ruleset.
+      var makeLexer = function (rules) {
+         return function () {
+            var l = new Lexer(rules);
+            l.compile();
+            return l;
+         }
+      }
+      // Helper function to validate that a lexer has a matching rule.
+      var hasRule = function (rule, standard) {
+         ok(rule, rule.name + ': validate that rule has been properly created.');
+         strictEqual(rule.name, standard.name, rule.name +
+            ': test that name matches expected value "' + standard.name + '"');
+         strictEqual(rule.pattern, standard.pattern, rule.name +
+            ': test that pattern matches expected value "' + standard.pattern + '"');
+         strictEqual(rule.discard, standard.discard, rule.name +
+            ': test that discard flag matches expected value "' + standard.discard + '"');
+         strictEqual(rule.numCaptures(), standard.numCaptures, rule.name +
+            ': test that number of captures matches expected value ' + standard.numCaptures);
+      };
+      // Helper function to compare token lists.
+      var matchTokens = function (expr, list, standard) {
+         ok(list, 'Validate that token list exists.');
+         ok(list instanceof Array, 'Validate that token list is an array.')
+         strictEqual(list.length, standard.length,
+            'Validate that the list has the right number of tokens.')
+         for (var i = 0; i < list.length; ++i) {
+            strictEqual(list[i].name, standard[i].name, expr + ': validate that token ' +
+               i + ' has the same name as the standard ("' + standard[i].name + '").');
+            strictEqual(list[i].content, standard[i].content, expr + ': validate that token ' +
+               i + ' has the same content as the standard ("' + standard[i].content + '").');
+            deepEqual(list[i].position, standard[i].position, expr + ': validate that token ' +
+               i + ' has the same position as the standard (line ' +
+               standard[i].position.line + ', col ' + standard[i].position.column + ').');
+         }
+      }
+
+      module('Argument Validation');
+      // Test that the lexer compiler only accepts valid rule structures
+      // consisting of a list of objects.
+      test('Rule Structure', function () {
+         throws(makeLexer(null), Lexer.ValidationError,
+            'Throw exception when the list of rules is null.');
+         throws(makeLexer(1), Lexer.ValidationError,
+            'Throw exception when an integer is passed for rules instead of a list.');
+         throws(makeLexer({}), Lexer.ValidationError,
+            'Throw exception when an object is passed for rules instead of a list. ');
+         throws(makeLexer([]), Lexer.ValidationError,
+            'Throw exception when the list of rules is empty.');
+         throws(makeLexer([null]), Lexer.ValidationError,
+            'Throw exception when a null rule is passed.');
+         throws(makeLexer([1]), Lexer.ValidationError,
+            'Throw exception when an integer is passed as a rule.');
+         throws(makeLexer([[]]),
+            'Throw exception when an empty list is passed as a rule.');
+         throws(makeLexer([{}]),
+            'Throw exception when an empty object is passed as a rule.');
+      });
+      // Test that the lexer compiler only accepts valid rule constructs:
+      // must be named and have a pattern.
+      test('Individual Rules', function () {
+         throws(makeLexer([{name: 'FOO'}]), Lexer.ValidationError,
+            'Throw exception when a rule does not contain a name.');
+         throws(makeLexer([{pattern: /foo/}]), Lexer.ValidationError,
+            'Throw exception when a rule does not contain a pattern.');
+         throws(makeLexer([{name: null, pattern: /foo/}]), Lexer.ValidationError,
+            'Throw exception when a rule contains a null name.');
+         throws(makeLexer([{name: '', pattern: /foo/}]), Lexer.ValidationError,
+            'Throw exception when a rule contains an empty name.');
+         throws(makeLexer([{name: 1, pattern: /foo/}]), Lexer.ValidationError,
+            'Throw exception when a rule contains a non-string name.');
+         throws(makeLexer([{name: 'FOO', pattern: null}]), Lexer.ValidationError,
+            'Throw exception when a rule contains a null pattern.');
+         throws(makeLexer([{name: 'FOO', pattern: []}]), Lexer.ValidationError,
+            'Throw exception when a rule contains a non-string/non-regex pattern.');
+         throws(makeLexer([{name: 'FOO', pattern: ''}]), Lexer.ValidationError,
+            'Throw exception when a rule contains an empty pattern.');
+         throws(makeLexer([{name: 'FOO', pattern: /FOO/, callback: 1}]), Lexer.ValidationError,
+            'Throw exception when a rule contains a non-function callback.');
+         ok(makeLexer([{name: 'FOO', pattern: 'FOO'}]),
+            'Validate that the lexer accepts a basic rule with name and string pattern.');
+         ok(makeLexer([{name: 'FOO', pattern: /FOO/}]),
+            'Validate that the lexer accepts a basic rule with name and regex pattern.');
+         ok(makeLexer([{name: 'FOO', pattern: 'FOO', callback: function () {}}]),
+            'Validate that the lexer accepts a function callback.');
+      });
+
+      // Test that the proper number of captures is recorded for each type of rule.
+      module('Captures');
+      // Test that the default line-break rule is injected.
+      test('Default HTML br Rule', function () {
+         ok(Lexer.Languages, 'Validate that Lexer.Languages exists.');
+         ok(Lexer.Languages.default, 'Validate that Lexer.Languages.default exists.');
+         var lexer = makeLexer(Lexer.Languages.default)();
+         hasRule(lexer._rules[0], {name: 'HTML_BREAK',
+            pattern: '<br\\s*\\/?\\s*>', discard: true, numCaptures: 0});
+      });
+      // Validate standard capture rules have the correct number of captures.
+      test('Standard Capture Rules', function () {
+         var lexer = makeLexer([
+            { name: 'LEADING', pattern: /(aaa)bbb/ },
+            { name: 'MIDDLE', pattern: /aaa(bbb)ccc/ },
+            { name: 'END', pattern: /aaa(bbb)/ }
+         ])();
+         ok(lexer, 'Validate that lexer has been created correctly.');
+         ok(lexer._rules instanceof Array, 'Validate that lexer rules list exists.');
+         notEqual(lexer._rules.length, 1, 'Validate that lexer rules list is not empty.')
+         // Leading capture rule.
+         hasRule(lexer._rules[1], {name: 'LEADING',
+            pattern: '(aaa)bbb', discard: false, numCaptures: 1});
+         hasRule(lexer._rules[2], {name: 'MIDDLE',
+            pattern: 'aaa(bbb)ccc', discard: false, numCaptures: 1});
+         hasRule(lexer._rules[3], {name: 'END',
+            pattern: 'aaa(bbb)', discard: false, numCaptures: 1});
+      });
+      // Validate nested capture rules have the correct number of captures.
+      test('Nested Capture Rules', function () {
+         var lexer = makeLexer([
+            { name: 'ONE', pattern: /(aaa(bbb))/ },
+            { name: 'MULTIPLE', pattern: /(aaa(bbb(ccc)))/ },
+            { name: 'SIBLINGS', pattern: /aaa(bbb(ccc)ddd(eee(fff)))(ggg)/ }
+         ])();
+         ok(lexer, 'Validate that lexer has been created correctly.');
+         ok(lexer._rules instanceof Array, 'Validate that lexer rules list exists.');
+         notEqual(lexer._rules.length, 1, 'Validate that lexer rules list is not empty.')
+         // Leading capture rule.
+         hasRule(lexer._rules[1], {name: 'ONE',
+            pattern: '(aaa(bbb))', discard: false, numCaptures: 2});
+         hasRule(lexer._rules[2], {name: 'MULTIPLE',
+            pattern: '(aaa(bbb(ccc)))', discard: false, numCaptures: 3});
+         hasRule(lexer._rules[3], {name: 'SIBLINGS',
+            pattern: 'aaa(bbb(ccc)ddd(eee(fff)))(ggg)', discard: false, numCaptures: 5});
+      });
+      // Validate captures are handled correctly when leading backslashes are present.
+      test('Leading Backslash Rules', function () {
+         var lexer = makeLexer([
+            { name: 'ODD_COUNT', pattern: /\\\(aaa(bbb)/ },
+            { name: 'EVEN_COUNT', pattern: /\\\\(aaa(bbb))/ }
+         ])();
+         ok(lexer, 'Validate that lexer has been created correctly.');
+         ok(lexer._rules instanceof Array, 'Validate that lexer rules list exists.');
+         notEqual(lexer._rules.length, 1, 'Validate that lexer rules list is not empty.')
+         // Leading capture rule.
+         hasRule(lexer._rules[1], {name: 'ODD_COUNT',
+            pattern: '\\\\\\(aaa(bbb)', discard: false, numCaptures: 1});
+         hasRule(lexer._rules[2], {name: 'EVEN_COUNT',
+            pattern: '\\\\\\\\(aaa(bbb))', discard: false, numCaptures: 2});
+      });
+      // Validate lookaheads are not counted as captures.
+      test('Lookahead Rules', function () {
+         var lexer = makeLexer([
+            { name: 'SIMPLE', pattern: /(?:aaa)/ },
+            { name: 'NESTED', pattern: /(?:aaa(?!bbb))/ },
+            { name: 'TYPES', pattern: /(?:aaa)bbb(?=ccc)ddd(?!eee)/ },
+            { name: 'WITH_CAPTURE', pattern: /(?:aaa(bbb))/ },
+            { name: 'NESTED_WITH_CAPTURE', pattern: /(?:aaa(bbb(?=ccc)))/ }
+         ])();
+         ok(lexer, 'Validate that lexer has been created correctly.');
+         ok(lexer._rules instanceof Array, 'Validate that lexer rules list exists.');
+         notEqual(lexer._rules.length, 1, 'Validate that lexer rules list is not empty.')
+         // Leading capture rule.
+         hasRule(lexer._rules[1], {name: 'SIMPLE',
+            pattern: '(?:aaa)', discard: false, numCaptures: 0});
+         hasRule(lexer._rules[2], {name: 'NESTED',
+            pattern: '(?:aaa(?!bbb))', discard: false, numCaptures: 0});
+         hasRule(lexer._rules[3], {name: 'TYPES',
+            pattern: '(?:aaa)bbb(?=ccc)ddd(?!eee)', discard: false, numCaptures: 0});
+         hasRule(lexer._rules[4], {name: 'WITH_CAPTURE',
+            pattern: '(?:aaa(bbb))', discard: false, numCaptures: 1});
+         hasRule(lexer._rules[5], {name: 'NESTED_WITH_CAPTURE',
+            pattern: '(?:aaa(bbb(?=ccc)))', discard: false, numCaptures: 1});
+      });
+      // Validate escaped open parens are not counted as captures.
+      test('Escape Rules', function () {
+         var lexer = makeLexer([
+            { name: 'LPAREN', pattern: /(aaa\(bbb)/ },
+            { name: 'RPAREN', pattern: /(aaa\)bbb)/ }
+         ])();
+         ok(lexer, 'Validate that lexer has been created correctly.');
+         ok(lexer._rules instanceof Array, 'Validate that lexer rules list exists.');
+         notEqual(lexer._rules.length, 1, 'Validate that lexer rules list is not empty.')
+         // Leading capture rule.
+         hasRule(lexer._rules[1], {name: 'LPAREN',
+            pattern: '(aaa\\(bbb)', discard: false, numCaptures: 1});
+         hasRule(lexer._rules[2], {name: 'RPAREN',
+            pattern: '(aaa\\)bbb)', discard: false, numCaptures: 1});
+      });
+      // Validate open parens inside char classes are not counted as captures.
+      test('Character Class Rules', function () {
+         var lexer = makeLexer([
+            { name: 'INSIDE', pattern: /[abc(def)]/ },
+            { name: 'INSIDE_ESCAPED_RBRACKET', pattern: /[abc\](def)]/ },
+            { name: 'INSIDE_ESCAPED_LPAREN', pattern: /[abc\(def]/ },
+            { name: 'INSIDE_FAKE', pattern: /\[abc(def)\]/ },
+            { name: 'INSIDE_FAKE_FAKE', pattern: /\\[abc(def)]/ },
+            { name: 'INSIDE_FAKE_ESCAPED_LPAREN', pattern: /\[abc\(def\]/ },
+            { name: 'INSIDE_FAKE_ESCAPED_LPAREN_NESTED', pattern: /\[abc\(def(ghi)\]/ }
+         ])();
+         ok(lexer, 'Validate that lexer has been created correctly.');
+         ok(lexer._rules instanceof Array, 'Validate that lexer rules list exists.');
+         notEqual(lexer._rules.length, 1, 'Validate that lexer rules list is not empty.')
+         // Leading capture rule.
+         hasRule(lexer._rules[1], {name: 'INSIDE',
+            pattern: '[abc(def)]', discard: false, numCaptures: 0});
+         hasRule(lexer._rules[2], {name: 'INSIDE_ESCAPED_RBRACKET',
+            pattern: '[abc\\](def)]', discard: false, numCaptures: 0});
+         hasRule(lexer._rules[3], {name: 'INSIDE_ESCAPED_LPAREN',
+            pattern: '[abc\\(def]', discard: false, numCaptures: 0});
+         hasRule(lexer._rules[4], {name: 'INSIDE_FAKE',
+            pattern: '\\[abc(def)\\]', discard: false, numCaptures: 1});
+         hasRule(lexer._rules[5], {name: 'INSIDE_FAKE_FAKE',
+            pattern: '\\\\[abc(def)]', discard: false, numCaptures: 0});
+         hasRule(lexer._rules[6], {name: 'INSIDE_FAKE_ESCAPED_LPAREN',
+            pattern: '\\[abc\\(def\\]', discard: false, numCaptures: 0});
+         hasRule(lexer._rules[7], {name: 'INSIDE_FAKE_ESCAPED_LPAREN_NESTED',
+            pattern: '\\[abc\\(def(ghi)\\]', discard: false, numCaptures: 1});
+      });
+
+      // Test that backreferences are properly updated.
+      module('Backreferences');
+      test('Standard Replacements', function () {
+         var lexer = makeLexer([
+            { name: 'BACKREF_1', pattern: /(aaa)bbb\1/ },
+            { name: 'BACKREF_2_3', pattern: /(aaa)(bbb(ccc))\1\2\3/ }
+         ])();
+         strictEqual('\\3', lexer._rules[1].pattern.slice(-2),
+            'Validate that a standard backreference is updated in the global pattern.');
+         strictEqual('\\5\\6\\7', lexer._rules[2].pattern.slice(-6),
+            'Validate that backreferences to nested captures are updated properly.');
+      });
+      test('Leading Backslashes', function () {
+         var lexer = makeLexer([
+            { name: 'BACKREF_1', pattern: /(aaa)bbb\\\1/ },
+            { name: 'FAKE_BACKREF', pattern: /(aaa)(bbb(ccc))\\\\1\2/ }
+         ])();
+         strictEqual('\\3', lexer._rules[1].pattern.slice(-2),
+            'Validate that a backreference with an odd number of leading backslashes is properly updated.');
+         strictEqual('\\1\\6', lexer._rules[2].pattern.slice(-4),
+            'Validate that a backreference with an even number of leading backslashes is ignored.');
+      });
+      test('Inside Character Classes', function () {
+         var lexer = makeLexer([
+            { name: 'INSIDE', pattern: /(aaa)bbb[\1]/ },
+            { name: 'INSIDE_FAKE', pattern: /(aaa)bbb\[\1\]/ },
+            { name: 'INSIDE_FAKED_ENDING', pattern: /(aaa)bbb[g\]\1]/ }
+         ])();
+         strictEqual('\\1]', lexer._rules[1].pattern.slice(-3),
+            'Validate that a backreference inside a character class is ignored.');
+         strictEqual('\\5\\]', lexer._rules[2].pattern.slice(-4),
+            'Validate that a backreference inside a fake character class is properly updated.');
+         strictEqual('\\1]', lexer._rules[3].pattern.slice(-3),
+            'Validate that a backreference inside a real character class with a false ending is properly updated.');
+      });
+
+      // Test short LISPish segments against the sample rules.
+      module('Lexing');
+      test('Single Line Snippets', function () {
+         var lexer = makeLexer(lispRules)();
+         ok(lexer, 'Validate that the lexer is properly created.')
+         ok(lexer._rules, 'Validate that the lexer rules exist.');
+         strictEqual(5, lexer._rules.length,
+            'Validate that the HTML br rule was injected.');
+         matchTokens('(foo bar baz)', lexer.lex('(foo bar baz)'), [
+            {name: 'LPAREN', content: '(', position: {line: 1, column: 1}},
+            {name: 'SYMBOL', content: 'foo', position: {line: 1, column: 2}},
+            {name: 'WHITESPACE', content: ' ', position: {line: 1, column: 5}},
+            {name: 'SYMBOL', content: 'bar', position: {line: 1, column: 6}},
+            {name: 'WHITESPACE', content: ' ', position: {line: 1, column: 9}},
+            {name: 'SYMBOL', content: 'baz', position: {line: 1, column: 10}},
+            {name: 'RPAREN', content: ')', position: {line: 1, column: 13}}
+         ]);
+         matchTokens('(+ 1 \t two)', lexer.lex('(+ 1 \t two)'), [
+            {name: 'LPAREN', content: '(', position: {line: 1, column: 1}},
+            {name: 'SYMBOL', content: '+', position: {line: 1, column: 2}},
+            {name: 'WHITESPACE', content: ' ', position: {line: 1, column: 3}},
+            {name: 'SYMBOL', content: '1', position: {line: 1, column: 4}},
+            {name: 'WHITESPACE', content: ' \t ', position: {line: 1, column: 5}},
+            {name: 'SYMBOL', content: 'two', position: {line: 1, column: 8}},
+            {name: 'RPAREN', content: ')', position: {line: 1, column: 11}}
+         ]);
+         matchTokens('(foo (bar\tbaz))', lexer.lex('(foo (bar\tbaz))'), [
+            {name: 'LPAREN', content: '(', position: {line: 1, column: 1}},
+            {name: 'SYMBOL', content: 'foo', position: {line: 1, column: 2}},
+            {name: 'WHITESPACE', content: ' ', position: {line: 1, column: 5}},
+            {name: 'LPAREN', content: '(', position: {line: 1, column: 6}},
+            {name: 'SYMBOL', content: 'bar', position: {line: 1, column: 7}},
+            {name: 'WHITESPACE', content: '\t', position: {line: 1, column: 10}},
+            {name: 'SYMBOL', content: 'baz', position: {line: 1, column: 11}},
+            {name: 'RPAREN', content: ')', position: {line: 1, column: 14}},
+            {name: 'RPAREN', content: ')', position: {line: 1, column: 15}}
+         ]);
+      });
+      test('Multiple Line Snippets', function () {
+         var lexer = makeLexer(lispRules)();
+         ok(lexer, 'Validate that the lexer is properly created.')
+         ok(lexer._rules, 'Validate that the lexer rules exist.');
+         strictEqual(5, lexer._rules.length,
+            'Validate that the HTML br rule was injected.');
+         matchTokens('(foo<br>bar<br>baz)', lexer.lex('(foo<br>bar<br>baz)'), [
+            {name: 'LPAREN', content: '(', position: {line: 1, column: 1}},
+            {name: 'SYMBOL', content: 'foo', position: {line: 1, column: 2}},
+            {name: 'SYMBOL', content: 'bar', position: {line: 2, column: 1}},
+            {name: 'SYMBOL', content: 'baz', position: {line: 3, column: 1}},
+            {name: 'RPAREN', content: ')', position: {line: 3, column: 4}}
+         ]);
+         matchTokens('<br>(<br>foo<br>(<br>bar<br>baz<br>)<br>)<br>',
+            lexer.lex('<br>(<br>foo<br>(<br>bar<br>baz<br>)<br>)<br>'), [
+               {name: 'LPAREN', content: '(', position: {line: 2, column: 1}},
+               {name: 'SYMBOL', content: 'foo', position: {line: 3, column: 1}},
+               {name: 'LPAREN', content: '(', position: {line: 4, column: 1}},
+               {name: 'SYMBOL', content: 'bar', position: {line: 5, column: 1}},
+               {name: 'SYMBOL', content: 'baz', position: {line: 6, column: 1}},
+               {name: 'RPAREN', content: ')', position: {line: 7, column: 1}},
+               {name: 'RPAREN', content: ')', position: {line: 8, column: 1}},
+         ]);
+      });
+      </script>
+   </head>
+   <body>
+      <div id="qunit"></div>
+   </body>
+</html>

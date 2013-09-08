@@ -42,13 +42,23 @@
  *
  * Partly inspired by js-lex (github.com/cweider/js-lex).
  */
+
+String.prototype.format = function () {
+    var args = arguments;
+    this.replace(/\{(\d+)\}/g, function (match, p1) {
+        var v1 = parseInt(p1) + 1;
+        return (v1 < args.length) ? args[v1] : p1;
+    });
+};
+
 var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
 
    /**
     * Abstraction for the current state of the lexer, without exposing all of
     * the internals of the lexer object.
     *
-    * @param
+    * @param line [int] - the current line number.
+    * @param offset [int] - the offset within the current line.
     */
    var State = function (line, offset) {
       this.line = line;
@@ -135,17 +145,17 @@ var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
       for (var i = 0; i < rules.length; ++i) {
          var rule = rules[i];
          if (!rule) {
-            throw new Lexer.ValidationError(i+1, 'invalid rule');
+            throw new Lexer.ValidationError(i + 1, 'invalid rule');
          } else if (!rule.name) {  // Rule must be named.
-            throw new Lexer.ValidationError(i+1, 'missing name');
+            throw new Lexer.ValidationError(i + 1, 'missing name');
          } else if (typeof(rule.name) != 'string' || rule.name.length == 0) {  // Rule must be named.
-            throw new Lexer.ValidationError(i+1, 'invalid name "' + rule.name + '"')
+            throw new Lexer.ValidationError(i + 1, 'invalid name "{1}"'.format(rule.name));
          } else if (!rule.pattern) {  // Rule pattern is mandatory.
-            throw new Lexer.ValidationError(rule.name, 'missing pattern')
+            throw new Lexer.ValidationError(rule.name, 'missing pattern');
          } else if (!(rule.pattern instanceof RegExp || typeof(rule.pattern) == 'string') ) {
-            throw new Lexer.ValidationError(rule.name, 'invalid pattern "' + rule.pattern + '"')
+            throw new Lexer.ValidationError(rule.name, 'invalid pattern "{1}"'.format(rule.pattern));
          } else if (rule.callback && !(rule.callback instanceof Function)) {
-            throw new Lexer.ValidationError(rule.name, 'invalid callback "' + rule.callback + '"');
+            throw new Lexer.ValidationError(rule.name, 'invalid callback "{1}"'.format(rule.callback));
          }
          var expression = (rule.pattern instanceof RegExp) ?
             rule.pattern.source : rule.pattern.replace(/[-.*+?^$()\[\]{}\\]/g, '\\$1')
@@ -154,7 +164,7 @@ var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
          r.updateReferences(totalCaptures + 1);
          totalCaptures += r.numCaptures() + 1;
          this._rules.push(r);
-         overallExp += '|(' + expression + ')';
+         overallExp += '|({1})'.format(expression);
       }
       // Add a special default rule to deal with HTML line breaks.
       this._rules.unshift(
@@ -178,8 +188,8 @@ var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
       text.replace(this._languageRegex, function () {
          var matchIndex = arguments[arguments.length-2];
          if (matchIndex > startIndex) {
-            console.log(lexer.state.line + ':' + lexer.state.offset +
-               ': skipped unexpected characters "' + text.slice(startIndex, matchIndex) + '"')
+            console.log('{1}:{2}: skipped unexpected characters "{3}"'.format(
+               lexer.state.line, lexer.state.offset, text.slice(startIndex, matchIndex)));
             lexer.state.offset += (matchIndex - startIndex);
          }
          // Iterate sequentially through all of the rules, and all of their
@@ -188,15 +198,11 @@ var Lexer = typeof(Lexer) != 'undefined' ? Lexer : function (rules) {
          // continue processing. This is guaranteed to select at least one of
          // the rules because there must have been a match to get here.
          var rule = null, val = arguments[0];
-         //console.log(arguments);
-         for (ruleIndex = 0, captureIndex = 1; ruleIndex < lexer._rules.length; ++ruleIndex) {
-            //console.log(ruleIndex, lexer._rules[ruleIndex]);
-            var n = lexer._rules[ruleIndex].numCaptures() + 1;
-            for (var i = 0; i < n; ++i, ++captureIndex) {
-               //console.log(captureIndex, 'argument', arguments[captureIndex]);
+         for (var i = 0, captureIndex = 1; i < lexer._rules.length; ++i) {
+            var n = lexer._rules[i].numCaptures() + 1;
+            for (var j = 0; j < n; ++j, ++captureIndex) {
                if (arguments[captureIndex]) {
-                  rule = lexer._rules[ruleIndex];
-                  //console.log('match');
+                  rule = lexer._rules[i];
                   break;
                }
             }
@@ -247,6 +253,17 @@ Lexer.Token = function (name, content, lexState) {
    }
 }
 
+// Get a stack trace from an exception.
+Lexer.StackTrace = function () {
+   // create a fake exception
+   try {
+      var fake = 0;
+      fake.doFake();
+   } catch (e) {
+      return e.stack;
+   }
+}
+
 /**
  * The error thrown when the rules for a language are incorrectly specified.
  */
@@ -254,7 +271,7 @@ Lexer.ValidationError = function (rule, msg) {
    this.name = 'Lexer.ValidationError';
    this.message = msg;
    this.rule = rule;
-   //this.stack = Lexer.getStackTrace();
+   this.stack = Lexer.StackTrace();
 
    // Return a nicely formatted error string.
    this.toString = function () {
